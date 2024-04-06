@@ -1,0 +1,8 @@
+# Ignore data
+*/data
+
+# Ignore keys
+*/keys
+
+# Ignore environment
+.env

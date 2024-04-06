@@ -1,0 +1,3 @@
+dbc-9fa3b211-53b8.cloud.databricks.com
+/sql/1.0/warehouses/551f52dae670ac68
+dapib34727edfdb302d8f79c1d52d946d94f

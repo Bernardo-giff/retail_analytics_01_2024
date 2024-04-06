@@ -6,3 +6,6 @@
 
 # Ignore environment
 .env
+
+# Ignore virtualenv
+*/myvenv

@@ -1,0 +1,314 @@
+---
+title: "VAR model and IRF Analysis"
+output:
+  word_document: default
+  html_document: default
+---
+
+## Bernardo Carvalho
+
+### 07/04/2024
+
+```{r, include=FALSE}
+
+install.packages("forecast", repos = "http://cran.us.r-project.org")
+install.packages("stargazer", repos = "http://cran.us.r-project.org")
+install.packages("tseries", repos = "http://cran.us.r-project.org")
+install.packages("knitr", repos = "http://cran.us.r-project.org")
+install.packages("kableExtra", repos = "http://cran.us.r-project.org")
+install.packages("readxl", repos = "http://cran.us.r-project.org")
+install.packages("vars", repos = "http://cran.us.r-project.org")
+
+
+library(knitr)
+library(kableExtra)
+library(readxl)
+library(forecast)
+library(tseries)
+library(vars)
+library(stargazer)
+
+```
+
+The following code implements the VAR model discussed in the final submission document.
+
+```{r, include=FALSE}
+setwd("~/Desktop/imperial_repos/retail_analytics_01_2024/data")
+data <- read.csv("var_model_ts.csv")
+
+```
+
+```{r}
+
+# Rename columns
+data$general_ads <- data$General
+data$brand_ads <- data$Brand
+data$display_ads <- data$Display
+
+ts.plot(data$adjusted_gmv_total, col="blue", main="Total GMV")
+ts.plot(data$adjusted_gmv_inbound, col="blue", main="Inbound GMV")
+ts.plot(data$general_ads, col="darkgreen", main="SA - Recycling")
+ts.plot(data$brand_ads, col="red", main="SA - Brand")
+ts.plot(data$display_ads, col="magenta", main="Display")
+```
+
+### Analysis Steps
+
+-   Perform unit root tests to check for non-stationary variables and take differences of the variables that are evolving.
+
+-   Estimate a vector autoregressive (VAR) model and interpret the coefficients.
+
+-   Estimate impulse response functions (IRFs) of sales to spending varialbes
+
+**Log Transformation**
+
+Given the high level of turbulence we observe through time-series plots, we need to take log of each variables to out the series as a first step.
+
+```{r}
+data$log_adjusted_gmv_total <- log(data$adjusted_gmv_total+1)
+data$log_adjusted_gmv_inbound <- log(data$adjusted_gmv_inbound+1)
+data$log_general_ads <- log(data$general_ads+1)
+data$log_brand_ads <- log(data$brand_ads+1)
+data$log_display_ads <- log(data$display_ads+1)
+```
+
+**Plot the data to observe trend**
+
+```{r}
+Total_GMV <- ts(data$adjusted_gmv_total, frequency = 1, start = c(1, 1))
+
+#trend plot and ACF and PACF.
+ggtsdisplay(Total_GMV) 
+```
+
+```{r}
+Inbound_GMV <- ts(data$adjusted_gmv_inbound, frequency = 1, start = c(1, 1))
+
+#trend plot and ACF and PACF.
+ggtsdisplay(Inbound_GMV) 
+```
+
+```{r}
+General_Ads <- ts(data$general_ads, frequency = 1, start = c(1, 1))
+
+#trend plot and ACF and PACF.
+ggtsdisplay(General_Ads) 
+```
+
+```{r}
+Brand_Ads <- ts(data$brand_ads, frequency = 4, start = c(1, 1))
+
+#trend plot and ACF and PACF.
+ggtsdisplay(Brand_Ads) 
+```
+
+```{r}
+Display_Ads <- ts(data$display_ads, frequency = 4, start = c(1, 1))
+
+#trend plot and ACF and PACF.
+ggtsdisplay(Display_Ads) 
+```
+
+Based on the adf plots, it seems that only the General ads show non-stationary trends. We test all of these using the adf test:
+
+```{r}
+LgmvTotal <- ts(data$log_adjusted_gmv_total, frequency = 1, start = c(1, 1))
+LgeneralAds <- ts(data$log_general_ads, frequency = 1, start = c(1, 1))
+LbrandAds <- ts(data$log_brand_ads, frequency = 1, start = c(1, 1))
+LdisplayAds <- ts(data$log_display_ads, frequency = 1, start = c(1, 1))
+
+
+adf.test(LgmvTotal)
+adf.test(LgeneralAds)
+adf.test(LbrandAds)
+adf.test(LdisplayAds)
+
+```
+
+The test results indicate that only the Brand search is stationary. Therefore, we will need to perform difference transformations to the other time series
+
+```{r}
+DgmvTotal <-diff(data$log_adjusted_gmv_total, differences = 1)
+DgeneralAds <-diff(data$log_general_ads, differences = 1)
+DdisplayAds <-diff(data$log_display_ads, differences = 1)
+
+adf.test(DgmvTotal)
+adf.test(DgeneralAds)
+adf.test(DdisplayAds)
+
+```
+
+For Total GMV and ads, 1 period difference was not enough. Therefore, we repeat the procedure with 2 periods now
+
+```{r}
+D2gmvTotal <-diff(data$log_adjusted_gmv_total, differences = 2)
+
+adf.test(D2gmvTotal)
+```
+
+Stationary tests suggest that now the three variables (with adwords spending first-differenced) are all stationary. We can proceed and construct our VAR model now.
+
+### Construct a VAR model
+
+Let's start with a VAR model for the Total GMV
+
+```{r, include=FALSE}
+# Cut first two rows of LbrandAds
+LbrandAds_cut <- window(LbrandAds, start = 3)
+DgeneralAds_cut <- window(ts(DgeneralAds, frequency=1, start = 1), start=2)
+DdisplayAds_cut <- window(ts(DdisplayAds, frequency=1, start = 1), start=2)
+```
+
+```{r, include=FALSE}
+cbind(window(DdisplayAds,start=2), 
+      window(DgeneralAds, start=2), 
+      window(LbrandAds, start=3),
+      ts(D2gmvTotal, frequency=1))
+```
+
+```{r warning=FALSE}
+
+DdisplayAds_cut <- window(DdisplayAds,start=2)
+DgeneralAds_cut <- window(DgeneralAds, start=2) 
+LbrandAds_cut <- window(LbrandAds, start=3)
+D2gmvTotal_ts <- ts(D2gmvTotal, frequency=1)
+
+#Build the first dataset for VAR model
+data.ts.d1 <- cbind(DdisplayAds_cut, DgeneralAds_cut, LbrandAds_cut, 
+                           D2gmvTotal_ts)
+
+# Remove NA's
+data.ts.d1 <- replace(data.ts.d1, is.na(data.ts.d1), 0)     
+
+var_total <- VAR(data.ts.d1, ic="AIC", lag.max=1, type="const")
+
+lmp <- var_total$varresult
+
+#stargazer( lmp$DdisplayAds_cut, lmp$DgeneralAds_cut,
+#           lmp$LbrandAds_cut, lmp$D2gmvTotal_ts, 
+           # column.labels = c('Display', 'General', 'Brand', 'GMV'), 
+#           type = "text", dep.var.labels.include = FALSE )
+
+stargazer(lmp, type='text')
+
+```
+
+### IRF Analysis[^1]
+
+[^1]: In this session we are using *orthogonalized impulse reaction function* for estimation; specifically, the model requires that a shock occurs only in one variable at a time. Such an assumption is reasonable if the shocks in different variables are independent. Moreover, the method implies certain ordering of the variables of interest. Under certain circumstances, the above-mentioned assumptions and restrictinos are not very reasonable. That's why one might consider adopting *generalized impulse reaction function (GIRF)*, which will loose these assumptions. However, in R environment, to implement GIRF estimations, we need to estimate a Bayesian VAR model (you may check pacakge "bvartools") instead, which is beyond the scope of this session.
+
+First, let's have a look at the graphs. IRF plots help you see visually when the peak effects occur. On the plots, the black, solid line refers to IRF coefficients, while the red, dashed lines refer to lower and upper bound of the IRF coefficient's confidence interval.
+
+```{r}
+irfs <- irf(var_total, impulse = c('DdisplayAds_cut', 'DgeneralAds_cut', 
+                                   'LbrandAds_cut'), 
+            response = 'D2gmvTotal_ts', 
+            runs = 100, n.ahead = 7 , ortho = TRUE, ci=0.95)
+plot(irfs)
+```
+
+**Immediate and Long-Term Effects**
+
+In order to compute the immediate and long-term effects, the following steps should be taken.
+
+-   Evaluate the significance of each IRF coefficient. If the t-statistics of the IRF coefficient is greater than 1 (t-stat\>1)[^2]
+
+[^2]: Here we follow previous research (e.g., Slotegraaf and Pauwels, 2008) to set the criteria as t\>1. You may apply t\>2 rule if you would like to evaluate coefficient significanc at 95% significance level.
+
+Then we treat it as signficant and keep the value of that coefficient; otherwise, we treat the coefficient as zero.
+
+To calculate the t-statistics, we need to:
+
+-   Derive the standard error $(se)$ of each coefficient from its confidence interval, since
+    -   $Lowerbound_{ci}= \beta -1.96* se$
+    -   $Upperbound_{ci}= \beta + 1.96* se$
+-   Calculate the t-statistics using
+    -   $t_{stat} = \beta / se$.
+
+Based on the above computations, the first period impact is called the immediate effect while the cumulative effect over 8 periods is called the long-run effect.
+
+Now we make a table to summarize IRF coefficients and their confidence intervals. You will see in the output that *response* means the reponse value at a particular period (there are 8 periods in total), *lower* and *upper* refer to the lower and upper bound of the corresponding confidence intervals, respectively.
+
+```{r}
+#Make a table to summarize IRF coefficients and their confidence intervals
+
+irf.table.ci <- round(data.frame(period = seq(1, 8), 
+                           response.display_ads = irfs$irf$DdisplayAds_cut, 
+                           display_ads.lower = irfs$Lower$DdisplayAds_cut, 
+                           display_ads.upper = irfs$Upper$DdisplayAds_cut,
+                           response.general_ads = irfs$irf$DgeneralAds_cut, 
+                           general_ads.lower = irfs$Lower$DgeneralAds_cut, 
+                           general_ads.upper = irfs$Upper$DgeneralAds_cut, 
+                           response.brand_ads = irfs$irf$LbrandAds_cut, 
+                           brand_ads.lower = irfs$Lower$LbrandAds_cut, 
+                           brand_ads.upper = irfs$Upper$LbrandAds_cut)
+                      ,4)
+colnames(irf.table.ci) <- c(
+  'Period', 'Display', 'Display Lower', 'Display Upper',
+  'General', 'General Lower', 'General Upper', 
+  'Brand','Brand Lower', 'Brand Upper')
+
+knitr::kable(irf.table.ci)
+```
+
+Now we apply the t\>1 criteria to determine coefficient significance and calculate long-term elasticities of adwords and flyer advertising spending.
+
+```{r}
+#General Adwords
+result_irf_general_adwords<-matrix(nrow = 8, ncol = 1)
+
+for (i in 1:8) {
+  se <- (irfs$Upper$DdisplayAds_cut[i]-irfs$Lower$DdisplayAds_cut[i])/(2*1.96)
+  t_irf_general_adwords<- irfs$irf$DdisplayAds_cut[i]/se
+   
+   if (t_irf_general_adwords>1) {
+    result_irf_general_adwords[i] <- irfs$irf$DdisplayAds_cut[i]
+   } else {
+      result_irf_general_adwords[i] <-0
+      }
+}
+
+result_irf_general_adwords #print out the results
+lr_general_adwords <- sum(result_irf_general_adwords)
+lr_general_adwords
+```
+
+```{r}
+#Brand Adwords
+result_irf_brand_adwords<-matrix(nrow = 8, ncol = 1)
+
+for (i in 1:8) {
+  se <- (irfs$Upper$LbrandAds_cut[i]-irfs$Lower$LbrandAds_cut[i])/(2*1.96)
+  t_irf_brand_adwords<- irfs$irf$LbrandAds_cut[i]/se
+   
+   if (t_irf_brand_adwords>1) {
+    result_irf_brand_adwords[i] <- irfs$irf$LbrandAds_cut[i]
+   } else {
+      result_irf_brand_adwords[i] <-0
+      }
+}
+
+result_irf_brand_adwords #print out the results
+lr_brand_adwords <- sum(result_irf_brand_adwords)
+lr_brand_adwords
+```
+
+```{r}
+#Brand Adwords
+result_irf_brand_adwords<-matrix(nrow = 8, ncol = 1)
+
+for (i in 1:8) {
+  se <- (irfs$Upper$LbrandAds_cut[i]-irfs$Lower$LbrandAds_cut[i])/(2*1.96)
+  t_irf_brand_adwords<- irfs$irf$LbrandAds_cut[i]/se
+   
+   if (t_irf_brand_adwords>1) {
+    result_irf_brand_adwords[i] <- irfs$irf$LbrandAds_cut[i]
+   } else {
+      result_irf_brand_adwords[i] <-0
+      }
+}
+
+result_irf_brand_adwords #print out the results
+lr_brand_adwords <- sum(result_irf_brand_adwords)
+lr_brand_adwords
+```
